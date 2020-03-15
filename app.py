@@ -31,14 +31,44 @@ def checkUserAuthStatus():
     except KeyError:
         return False
 
-@app.route("/")
+
+# ==============================
+#       Logged in routes
+# ==============================
+
+@app.route("/", methods=['GET', 'POST'])
 def index():
     # Check if user is logged in
     if checkUserAuthStatus():
-        return render_template('index.html')
+        if(request.method == 'GET'):
+            return render_template('index.html', books=None)
+
+        if(request.method == "POST"):
+            query = request.form.get('query')
+            criteria = request.form.get('search-criteria')
+            criteria = "%" + criteria + "%"
+
+            # Search for books
+            books = db.execute('SELECT books.id as id, isbn, name AS author, title, \
+                published FROM books JOIN authors ON \
+                books.author_id = authors.id \
+                WHERE :criteria LIKE :value', {
+                "criteria": criteria,
+                "value": query
+                })
+
+            # Just for debugging
+            print(list(books))
+            return render_template('index.html', books=books)
+
+
 
     return redirect('/login')
 
+
+# ===========================
+#    Authenticate Routes
+# ===========================
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
