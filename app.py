@@ -1,9 +1,13 @@
 import os
+import requests
 
-from flask import Flask, session, request, render_template, redirect, url_for
+from flask import Flask, session, request, render_template, redirect, url_for, jsonify
 from flask_session import Session
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
+
+
 
 app = Flask(__name__)
 
@@ -21,17 +25,143 @@ engine = create_engine(os.getenv("DATABASE_URL"))
 db = scoped_session(sessionmaker(bind=engine))
 
 
+# ==============================
+#       Helper Functions
+# ==============================
+
 def checkUserAuthStatus():
+    """Checks if a user is authenticated."""
     try:
         username = session['username']
         if(len(username) >= 4):
             return True
-
+        
         return False
     except KeyError:
         return False
 
 
+def getBooksByTitle(title):
+    """Searches for books by title."""
+    
+    books = db.execute("SELECT books.id as id, isbn, name AS author, title, \
+                published FROM books JOIN authors ON \
+                books.author_id = authors.id \
+                WHERE title LIKE :query LIMIT 20;", {
+                "query": title
+            })
+    
+    return list(books)
+
+def getBooksByIsbn(isbn):
+    books = db.execute("SELECT books.id as id, isbn, name AS author, title, \
+                published FROM books JOIN authors ON \
+                books.author_id = authors.id \
+                WHERE isbn LIKE :query LIMIT 20;", {
+                "query": isbn
+            })
+    
+    return list(books)
+    
+def getBooksByAuthor(author):
+    books = db.execute("SELECT books.id as id, isbn, name AS author, title, \
+                published FROM books JOIN authors ON \
+                books.author_id = authors.id \
+                WHERE authors.name LIKE :query LIMIT 20;", {
+                "query": author
+            })
+    
+    return list(books)
+
+
+def getBookById(id):
+    """Returns a book by its id."""
+    book = db.execute("""
+                        SELECT 
+                            books.id as id,
+                            books.title as title,
+                            books.isbn as isbn,
+                            books.published as published,
+                            authors.name as author
+                        FROM books
+                        JOIN authors
+                        ON
+                            books.author_id = authors.id
+                        WHERE books.id = :id;""",{"id": id})
+    try:
+        # Convert the book to dictionary
+        book =  list(book)[0]
+        return {
+            "id": book[0],
+            "title": book[1],
+            "isbn": book[2],
+            "published": book[3],
+            "author": book[4]
+        }
+    except IndexError:
+        return None
+
+
+def getBookReviewsByUser(book_id, username):
+    """Returns reviews of a book by username """
+    
+    review = db.execute("""
+                        SELECT
+                            reviews.review as text,
+                            reviews.created_on as created_on,
+                            reviews.rating as rating
+                        FROM users
+                        INNER JOIN reviews ON
+                        users.id = reviews.user_id
+                        WHERE 
+                            reviews.book_id = :book_id
+                        AND
+                            users.username = :username
+                    """, {"book_id": book_id, "username": username})
+    try:
+        review = list(review)[0]
+        
+        # Convert rating to 0 to 100%
+        
+        return {
+            "text": review[0],
+            "created_on": review[1],
+            "rating": int(review[2]) * 20
+        }
+        
+    except IndexError:
+        return None
+    
+
+    
+def addReviewByBookId(book_id, rating, review):
+    try:
+        # Find the user id via username
+        user_id = db.execute("SELECT id FROM users WHERE username=:username;", {
+            "username": session["username"]
+        })
+        
+        user_id = list(user_id)[0][0]
+        
+        # Insert the review
+        db.execute("INSERT INTO reviews (book_id, user_id, rating, review) VALUES (:book, :user, :rating, :review)", {
+            "book": book_id,
+            "user": user_id,
+            "rating": rating,
+            "review": review
+        })
+        
+        # Commit the changes
+        db.commit()
+        
+        # Return the success
+        return True
+    
+    except Exception as ex:
+        return False
+        
+    
+    
 # ==============================
 #       Logged in routes
 # ==============================
@@ -46,19 +176,22 @@ def index():
         if(request.method == "POST"):
             query = request.form.get('query')
             criteria = request.form.get('search-criteria')
-            criteria = "%" + criteria + "%"
-
-            # Search for books
-            books = db.execute('SELECT books.id as id, isbn, name AS author, title, \
-                published FROM books JOIN authors ON \
-                books.author_id = authors.id \
-                WHERE :criteria LIKE :value', {
-                "criteria": criteria,
-                "value": query
-                })
-
-            # Just for debugging
-            print(list(books))
+            query = "%" + query + "%"
+            
+            # Store the books
+            books = []
+            
+            # Get Results based on criteria
+            if(criteria == 'title'):
+                books = getBooksByTitle(query)
+            elif criteria == 'isbn':
+                books = getBooksByIsbn(query)
+            elif criteria == 'author':
+                books = getBooksByAuthor(query)
+            else:
+                books = None
+            
+            # Display the list of books.
             return render_template('index.html', books=books)
 
 
@@ -66,6 +199,103 @@ def index():
     return redirect('/login')
 
 
+
+@app.route('/book/details/<int:id>')
+def details(id):
+    # Retrieve book via provided id
+    book = getBookById(id)
+    
+    # Get book reviews
+    review = getBookReviewsByUser(id, session.get('username'))
+    
+    # the average rating and number of ratings the work has received from Goodreads.
+    data = getGoodReadsData(book["isbn"])
+    
+    average_rating = data["books"][0]["average_rating"]
+    work_ratings_count = data["books"][0]["work_ratings_count"]
+    
+    # Render the details page
+    return render_template('details.html', data={
+        "book": book, 
+        "review": review,
+        "work_ratings_count": work_ratings_count,
+        "average_rating": average_rating
+    })
+
+
+@app.route('/book/reviews/add', methods=["POST"])
+def addReview():
+    book_id = request.form.get('book-id')
+    rating = request.form.get('rating')
+    review = request.form.get('review')
+    
+    # Add review to database
+    status = addReviewByBookId(book_id, rating, review)
+    
+    # Redirect the user to book detail page
+    if status:
+        return redirect(f"/book/details/{book_id}")
+    
+    return redirect("error.html", error="Something went wrong. We could not add review at this time. Please try again.")
+    
+@app.route('/instuctions')
+def instructions():
+    return render_template('instructions.html')
+    
+
+# ===========================
+#  API And Goodreads Rotues
+# ===========================
+GOODREADS_KEY = "FZ44KJKkvsfTR1tUYOOCQ"
+def getGoodReadsData(isbn):
+    res = requests.get('https://www.goodreads.com/book/review_counts.json',
+                       params={"key": GOODREADS_KEY, "isbns": isbn})
+    
+    return res.json()
+
+
+@app.route('/api/<string:isbn>')
+def apiReview(isbn):
+    # Get Book details by ISBN
+    books = db.execute("""
+                        SELECT 
+                            books.title as title,
+                            authors.name as author,
+                            books.published as year,
+                            books.isbn as isbn
+                        FROM books
+                        JOIN authors
+                        ON books.author_id = authors.id
+                        WHERE books.isbn = :isbn
+                    """, {
+        "isbn": isbn
+    })
+    
+    try:
+        books = list(books)[0]
+    except:
+        return jsonify({"error": "Book with given isbn not found in the database."}), 404
+    
+    # Get Good Reads Api Data
+    reviews = getGoodReadsData(isbn)
+    
+    review_count = reviews["books"][0]["reviews_count"]
+    average_score = reviews["books"][0]["average_rating"]
+    
+    # Create a result object
+    result = {
+        "title": books[0],
+        "author": books[1],
+        "year": books[2],
+        "isbn": books[3],
+        "review_count": review_count,
+        "average_score": average_score
+    }
+    
+    return jsonify(result)
+
+
+    
 # ===========================
 #    Authenticate Routes
 # ===========================
@@ -148,7 +378,6 @@ def signup():
             # Redirect the user to home page
             return redirect("/")
         except Exception as ex:
-            print(ex)
             return render_template("signup.html", error="User cannot be created. Some error occured.")
 
 
