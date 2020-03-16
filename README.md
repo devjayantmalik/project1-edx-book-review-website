@@ -38,7 +38,7 @@ The routes are login and signup, which allows a user to create a new account and
 For the simplicity the passwords are not encrypted before storing in the database.
 
 ## Video URL
-The video is available on youtube, explaining all the functionality of the application. My videos are usually longer than 5 to 10 minutes, because i don't have editing skills. The video URL is [https://youtube.com/](https://youtube.com/video-url)
+The video is available on youtube, explaining all the functionality of the application. My videos are usually longer than 5 to 10 minutes, because i don't have editing skills. The video URL is [https://youtu.be/-irF01kCQ8c](https://youtu.be/-irF01kCQ8c)
 
 
 ## Thanks
