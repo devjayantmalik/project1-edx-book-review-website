@@ -113,7 +113,7 @@ def main():
 		title VARCHAR(200) NOT NULL, \
 		published INTEGER NOT NULL DEFAULT 0, \
 		author_id INTEGER REFERENCES authors)')
-
+    
 	db.commit()
 
 	print("tables created successfully...")
